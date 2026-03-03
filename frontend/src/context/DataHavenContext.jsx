@@ -1,93 +1,30 @@
 // DataHaven Context Provider - Global State Management for DataHaven Integration
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-
-// Error boundary for DataHaven SDK issues
-const DataHavenErrorBoundary = ({ children, onError }) => {
-  const [hasError, setHasError] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const handleError = (event) => {
-      console.error('DataHaven SDK Error:', event.error);
-      setHasError(true);
-      setError(event.error);
-      if (onError) onError(event.error);
-    };
-
-    window.addEventListener('error', handleError);
-    window.addEventListener('unhandledrejection', (event) => {
-      handleError({ error: event.reason });
-    });
-
-    return () => {
-      window.removeEventListener('error', handleError);
-      window.removeEventListener('unhandledrejection', handleError);
-    };
-  }, [onError]);
-
-  if (hasError) {
-    return (
-      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-        <h3 className="text-red-800 font-semibold">DataHaven SDK Error</h3>
-        <p className="text-red-600 text-sm mt-1">
-          There was an issue loading the DataHaven SDK. Please refresh the page and try again.
-        </p>
-        <details className="mt-2">
-          <summary className="text-red-500 cursor-pointer text-xs">Technical Details</summary>
-          <pre className="text-xs text-red-400 mt-1 whitespace-pre-wrap">
-            {error?.message || error?.toString() || 'Unknown error'}
-          </pre>
-        </details>
-      </div>
-    );
-  }
-
-  return children;
-};
-
-// Lazy load DataHaven services with error handling
-let servicesLoaded = false;
-let servicesLoading = false;
-let servicesError = null;
-
-const loadDataHavenServices = async () => {
-  if (servicesLoaded) return;
-  if (servicesLoading) {
-    // Wait for loading to complete
-    while (servicesLoading) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    return;
-  }
-  if (servicesError) throw servicesError;
-
-  servicesLoading = true;
-  try {
-    // Import services with error handling
-    const [clientService, mspService, storageOperations] = await Promise.all([
-      import('../services/clientService').catch(err => {
-        console.error('Failed to load clientService:', err);
-        throw new Error(`Client service loading failed: ${err.message}`);
-      }),
-      import('../services/mspService').catch(err => {
-        console.error('Failed to load mspService:', err);
-        throw new Error(`MSP service loading failed: ${err.message}`);
-      }),
-      import('../services/storageOperations').catch(err => {
-        console.error('Failed to load storageOperations:', err);
-        throw new Error(`Storage operations loading failed: ${err.message}`);
-      }),
-    ]);
-    
-    servicesLoaded = true;
-    return { clientService, mspService, storageOperations };
-  } catch (err) {
-    servicesError = err;
-    throw err;
-  } finally {
-    servicesLoading = false;
-  }
-};
+import {
+  connectWallet,
+  disconnectWallet,
+  restoreWalletConnection,
+  isWalletConnected,
+  getConnectedAddress,
+  getWalletBalance,
+  initPolkadotApi,
+  disconnectPolkadotApi,
+} from '../services/clientService';
+import {
+  connectToMsp,
+  disconnectMsp,
+  isMspConnected,
+  authenticateUser,
+  isAuthenticated,
+  getUserProfile,
+  getMspHealth,
+} from '../services/mspService';
+import {
+  createBucket,
+  waitForBackendBucketReady,
+  uploadAuditProof,
+  getBucketsFromMSP,
+} from '../services/storageOperations';
 
 // Create the context
 const DataHavenContext = createContext(null);

@@ -11,7 +11,10 @@ import {
   FileText,
   Clock,
   Fingerprint,
-  AlertCircle
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  List
 } from 'lucide-react';
 import { useDataHaven } from '../context/DataHavenContext';
 import { NETWORKS } from '../config/networks';
@@ -28,6 +31,7 @@ export default function DataHavenStoragePanel({ promptHash, responseHash, gatewa
 
   const [copiedField, setCopiedField] = useState(null);
   const [localError, setLocalError] = useState(null);
+  const [showAllProofs, setShowAllProofs] = useState(false);
 
   const handleCopy = useCallback((text, field) => {
     navigator.clipboard.writeText(text);
@@ -329,6 +333,89 @@ export default function DataHavenStoragePanel({ promptHash, responseHash, gatewa
               </>
             )}
           </button>
+
+          {/* View All Proofs */}
+          {uploadedProofs.length > 1 && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowAllProofs(!showAllProofs)}
+                className="w-full flex items-center justify-between py-2 px-3 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <List className="w-4 h-4" />
+                  <span className="font-medium">All Stored Proofs ({uploadedProofs.length})</span>
+                </div>
+                {showAllProofs ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+              </button>
+
+              {showAllProofs && (
+                <div className="mt-3 space-y-2 max-h-64 overflow-y-auto">
+                  {uploadedProofs.slice(1).map((proof, index) => (
+                    <div key={proof.fileKey} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-700">
+                          Proof #{uploadedProofs.length - index - 1}
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {new Date(proof.proofPayload?.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-mono text-xs text-gray-600 flex-1 truncate">
+                          {truncateHash(proof.fileKey, 20)}
+                        </p>
+                        <a
+                          href={proof.explorerUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 hover:bg-gray-200 rounded transition-colors"
+                          title="View on Explorer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 text-blue-500" />
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bucket Info */}
+          {activeBucketId && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <Database className="w-4 h-4 text-teal-600" />
+                <span className="text-xs font-semibold text-gray-700">Active Storage Bucket</span>
+              </div>
+              <div className="p-3 bg-gradient-to-br from-teal-50 to-blue-50 rounded-lg border border-teal-200">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-gray-600">Bucket ID</span>
+                  <button
+                    onClick={() => handleCopy(activeBucketId, 'activeBucket')}
+                    className="p-1 hover:bg-white rounded transition-colors"
+                  >
+                    {copiedField === 'activeBucket' ? (
+                      <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5 text-gray-500" />
+                    )}
+                  </button>
+                </div>
+                <p className="font-mono text-xs text-gray-800 break-all">
+                  {truncateHash(activeBucketId, 24)}
+                </p>
+                <div className="mt-2 pt-2 border-t border-teal-100 flex items-center justify-between text-xs">
+                  <span className="text-gray-600">Total Files Stored</span>
+                  <span className="font-semibold text-teal-700">{uploadedProofs.length}</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -336,7 +423,18 @@ export default function DataHavenStoragePanel({ promptHash, responseHash, gatewa
       <div className="mt-4 pt-4 border-t border-gray-100">
         <div className="flex items-center justify-between text-xs text-gray-400">
           <span>DataHaven Testnet</span>
-          <span>Chain ID: {NETWORKS.testnet.id}</span>
+          <div className="flex items-center gap-2">
+            <span>Chain ID: {NETWORKS.testnet.id}</span>
+            <a
+              href={NETWORKS.testnet.explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1 hover:bg-gray-100 rounded transition-colors"
+              title="View Network Explorer"
+            >
+              <ExternalLink className="w-3 h-3 text-blue-400" />
+            </a>
+          </div>
         </div>
       </div>
     </div>

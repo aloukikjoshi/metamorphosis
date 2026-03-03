@@ -17,7 +17,6 @@ export default defineConfig({
     alias: {
       crypto: 'crypto-browserify',
       buffer: 'buffer',
-      process: 'process',
       util: 'util',
     },
   },
@@ -31,6 +30,5 @@ export default defineConfig({
       'buffer',
       'util',
     ],
-    exclude: ['process'],
   },
 });
