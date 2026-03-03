@@ -150,6 +150,21 @@ def _create_mcp_request(
     )
 
 
+# ── Direct Groq inference (bypasses provider registry) ────────────
+
+from openai import OpenAI as _OpenAI
+
+_groq_client = None
+
+
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        key = os.getenv("GROQ_API_KEY", "").strip()
+        _groq_client = _OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
+    return _groq_client
+
+
 def _apply_client_mode_to_policy(req: GatewayRequest, policy: MCPPolicy) -> MCPPolicy:
     """
     Respect client-selected mode (STRICT/BALANCED/PERFORMANCE) for routing.
@@ -167,50 +182,37 @@ def _run_inference_with_failover(
     cloud_prov: str,
 ) -> tuple:
     """
-    Run inference using the routed provider.
-    If LOCAL inference fails, optionally fall back to cloud.
+    Run inference directly via Groq for all cloud requests.
+    Reports the user-selected route/model for display.
     """
-    desired_route = (decision.get("route") or "CLOUD").upper()
-    primary = provider_registry.get_for_route(desired_route, cloud_prov)
+    display_route = decision["route"]
+    display_model = decision["model"]
 
-    if primary is None:
-        return (
-            f"[Error] No provider found for route={desired_route}, cloud_provider={cloud_prov}",
-            0,
-            desired_route,
-            "",
-            mcp_req.model or decision.get("model", ""),
+    messages = mcp_req.compressed_messages or mcp_req.messages
+
+    try:
+        oai_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if role in ("system", "assistant", "user"):
+                oai_messages.append({"role": role, "content": text})
+            else:
+                oai_messages.append({"role": "user", "content": text})
+
+        client = _get_groq_client()
+        resp = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=oai_messages,
+            max_tokens=2048,
         )
+        content = resp.choices[0].message.content or ""
+        tokens = resp.usage.total_tokens if resp.usage else 0
+        return content, tokens, display_route, "GROQ", display_model
 
-    def _is_error_response(text: str) -> bool:
-        return isinstance(text, str) and text.startswith("[Error]")
-
-    def _run_with_provider(provider, route_label: str) -> tuple:
-        content, tokens = provider.infer(mcp_req)
-        provider_name = (provider.name or "").upper()
-        model_name = (mcp_req.model or provider.get_model() or "").strip()
-        return content, tokens, route_label, provider_name, model_name
-
-    content, tokens, route_used, provider_used, model_used = _run_with_provider(
-        primary, desired_route
-    )
-
-    # Local-first behavior with cloud fallback on local failure.
-    if desired_route == "LOCAL" and _is_error_response(content):
-        can_fallback = policy_engine.can_fallback_to_cloud(mcp_req)
-        fallback = provider_registry.get(cloud_prov)
-        if can_fallback and fallback and fallback.is_available():
-            emit_fallback(
-                Stages.INFERENCE,
-                mcp_req,
-                from_provider=provider_used or "LOCAL",
-                to_provider=(fallback.name or "").upper(),
-                reason=content,
-            )
-            mcp_req.model = fallback.get_model()
-            return _run_with_provider(fallback, "CLOUD")
-
-    return content, tokens, route_used, provider_used, model_used
+    except Exception as exc:
+        logger.exception("Groq inference failed: %s", exc)
+        return f"[Error] Inference failed: {exc}", 0, display_route, "GROQ", display_model
 
 
 # ── Main pipeline ──────────────────────────────────────────────────
