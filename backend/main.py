@@ -1,4 +1,3 @@
-import os
 import time
 import uuid
 import logging
@@ -20,6 +19,7 @@ from backend.models.mcp_contracts import (
     MCPRequest,
     MCPResponse,
     MCPPolicy,
+    PolicyMode,
     MCPTokenStats,
     MCPLatencyStats,
     MCPRedactionInfo,
@@ -150,19 +150,15 @@ def _create_mcp_request(
     )
 
 
-# ── Direct Groq inference (bypasses provider registry) ────────────
-
-from openai import OpenAI as _OpenAI
-
-_groq_client = None
-
-
-def _get_groq_client():
-    global _groq_client
-    if _groq_client is None:
-        key = os.getenv("GROQ_API_KEY", "").strip()
-        _groq_client = _OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
-    return _groq_client
+def _apply_client_mode_to_policy(req: GatewayRequest, policy: MCPPolicy) -> MCPPolicy:
+    """
+    Respect client-selected mode (STRICT/BALANCED/PERFORMANCE) for routing.
+    """
+    try:
+        policy.mode = PolicyMode(req.mode.value)
+    except Exception:
+        logger.warning("Invalid client mode '%s'; keeping policy mode", req.mode.value)
+    return policy
 
 
 def _run_inference_with_failover(
@@ -171,37 +167,50 @@ def _run_inference_with_failover(
     cloud_prov: str,
 ) -> tuple:
     """
-    Run inference directly via Groq.
-    Reports the user-selected route/model for display.
+    Run inference using the routed provider.
+    If LOCAL inference fails, optionally fall back to cloud.
     """
-    display_route = decision["route"]
-    display_model = decision["model"]
+    desired_route = (decision.get("route") or "CLOUD").upper()
+    primary = provider_registry.get_for_route(desired_route, cloud_prov)
 
-    messages = mcp_req.compressed_messages or mcp_req.messages
-
-    try:
-        oai_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            text = msg.get("content", "")
-            if role in ("system", "assistant", "user"):
-                oai_messages.append({"role": role, "content": text})
-            else:
-                oai_messages.append({"role": "user", "content": text})
-
-        client = _get_groq_client()
-        resp = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=oai_messages,
-            max_tokens=2048,
+    if primary is None:
+        return (
+            f"[Error] No provider found for route={desired_route}, cloud_provider={cloud_prov}",
+            0,
+            desired_route,
+            "",
+            mcp_req.model or decision.get("model", ""),
         )
-        content = resp.choices[0].message.content or ""
-        tokens = resp.usage.total_tokens if resp.usage else 0
-        return content, tokens, display_route, display_model
 
-    except Exception as exc:
-        logger.exception("Groq inference failed: %s", exc)
-        return f"[Error] Inference failed: {exc}", 0, display_route, display_model
+    def _is_error_response(text: str) -> bool:
+        return isinstance(text, str) and text.startswith("[Error]")
+
+    def _run_with_provider(provider, route_label: str) -> tuple:
+        content, tokens = provider.infer(mcp_req)
+        provider_name = (provider.name or "").upper()
+        model_name = (mcp_req.model or provider.get_model() or "").strip()
+        return content, tokens, route_label, provider_name, model_name
+
+    content, tokens, route_used, provider_used, model_used = _run_with_provider(
+        primary, desired_route
+    )
+
+    # Local-first behavior with cloud fallback on local failure.
+    if desired_route == "LOCAL" and _is_error_response(content):
+        can_fallback = policy_engine.can_fallback_to_cloud(mcp_req)
+        fallback = provider_registry.get(cloud_prov)
+        if can_fallback and fallback and fallback.is_available():
+            emit_fallback(
+                Stages.INFERENCE,
+                mcp_req,
+                from_provider=provider_used or "LOCAL",
+                to_provider=(fallback.name or "").upper(),
+                reason=content,
+            )
+            mcp_req.model = fallback.get_model()
+            return _run_with_provider(fallback, "CLOUD")
+
+    return content, tokens, route_used, provider_used, model_used
 
 
 # ── Main pipeline ──────────────────────────────────────────────────
@@ -222,6 +231,7 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
     except Exception as exc:
         logger.warning("Policy fetch failed, using default: %s", exc)
         mcp_req.policy = MCPPolicy.default()
+    mcp_req.policy = _apply_client_mode_to_policy(req, mcp_req.policy)
     policy_fetch_ms = (time.perf_counter() - t0) * 1000
     emit_event(
         Stages.POLICY_FETCH,
@@ -368,7 +378,7 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
 
     # ─── [7] Inference (with failover) ──────────────────────────
     t0 = time.perf_counter()
-    raw_response, usage_tokens, actual_route, provider_used = (
+    raw_response, usage_tokens, actual_route, actual_provider, actual_model = (
         _run_inference_with_failover(mcp_req, decision, cloud_prov)
     )
     inference_ms = (time.perf_counter() - t0) * 1000
@@ -378,7 +388,7 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
         mcp_req,
         duration_ms=inference_ms,
         route_decision=actual_route,
-        provider=provider_used,
+        provider=actual_provider,
         token_count=usage_tokens,
     )
 
@@ -445,8 +455,8 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
         dh_result = datahaven_client.log_inference(
             request=mcp_req,
             response_route=actual_route,
-            provider=provider_used,
-            model=decision["model"],
+            provider=actual_provider,
+            model=actual_model,
             token_count=usage_tokens,
             latency_ms=total_ms,
             privacy_level=privacy_level,
@@ -472,7 +482,7 @@ def gateway(req: GatewayRequest, request: Request, background_tasks: BackgroundT
         request_id=request_id,
         response=final_response,
         route=actual_route,
-        model_used=decision["model"],
+        model_used=actual_model,
         token_stats=token_stats,
         latency=LatencyStats(
             input_guardrails_ms=round(input_guardrails_ms, 2),
@@ -519,6 +529,7 @@ def mcp_gateway(req: GatewayRequest, request: Request, background_tasks: Backgro
         mcp_req.policy = policy_engine.fetch_policy(user_id)
     except Exception:
         mcp_req.policy = MCPPolicy.default()
+    mcp_req.policy = _apply_client_mode_to_policy(req, mcp_req.policy)
     policy_fetch_ms = (time.perf_counter() - t0) * 1000
     emit_event(Stages.POLICY_FETCH, mcp_req, duration_ms=policy_fetch_ms)
     
@@ -587,11 +598,11 @@ def mcp_gateway(req: GatewayRequest, request: Request, background_tasks: Backgro
     
     # [7] Inference
     t0 = time.perf_counter()
-    raw_response, usage_tokens, actual_route, provider_used = _run_inference_with_failover(
+    raw_response, usage_tokens, actual_route, actual_provider, actual_model = _run_inference_with_failover(
         mcp_req, decision, cloud_prov
     )
     inference_ms = (time.perf_counter() - t0) * 1000
-    emit_event(Stages.INFERENCE, mcp_req, duration_ms=inference_ms, provider=provider_used)
+    emit_event(Stages.INFERENCE, mcp_req, duration_ms=inference_ms, provider=actual_provider)
     
     # [8] Output Guardrails
     t0 = time.perf_counter()
@@ -636,8 +647,8 @@ def mcp_gateway(req: GatewayRequest, request: Request, background_tasks: Backgro
             datahaven_client.log_inference(
                 request=mcp_req,
                 response_route=actual_route,
-                provider=provider_used,
-                model=decision["model"],
+                provider=actual_provider,
+                model=actual_model,
                 token_count=usage_tokens,
                 latency_ms=total_ms,
                 privacy_level=privacy_level,
@@ -653,8 +664,8 @@ def mcp_gateway(req: GatewayRequest, request: Request, background_tasks: Backgro
         request_id=request_id,
         response=final_response,
         route=actual_route,
-        provider=provider_used,
-        model_used=decision["model"],
+        provider=actual_provider,
+        model_used=actual_model,
         token_stats=MCPTokenStats(
             original=tokens_before,
             after_compression=tokens_after,

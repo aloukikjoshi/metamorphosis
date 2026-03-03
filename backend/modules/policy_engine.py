@@ -189,7 +189,6 @@ class PolicyEngine:
         """
         return (
             request.policy.allow_cloud and
-            request.policy.mode != PolicyMode.STRICT and
             any(
                 request.policy.allows_provider(p)
                 for p in ["groq", "openai", "mistral", "openrouter"]
