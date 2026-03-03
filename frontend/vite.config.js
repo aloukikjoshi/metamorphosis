@@ -10,4 +10,27 @@ export default defineConfig({
       "/health": "http://127.0.0.1:8000",
     },
   },
+  define: {
+    global: 'globalThis',
+  },
+  resolve: {
+    alias: {
+      crypto: 'crypto-browserify',
+      buffer: 'buffer',
+      process: 'process',
+      util: 'util',
+    },
+  },
+  optimizeDeps: {
+    include: [
+      '@polkadot/api',
+      '@polkadot/types',
+      '@storagehub-sdk/core',
+      '@storagehub-sdk/msp-client',
+      'crypto-browserify',
+      'buffer',
+      'util',
+    ],
+    exclude: ['process'],
+  },
 });
