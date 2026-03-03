@@ -7,7 +7,7 @@ export const NETWORKS = {
     rpcUrl: 'https://services.datahaven-testnet.network/testnet',
     wsUrl: 'wss://services.datahaven-testnet.network/testnet',
     mspUrl: 'https://deo-dh-backend.testnet.datahaven-infra.network/',
-    explorerUrl: 'https://blockscout.datahaven-testnet.network',
+    explorerUrl: 'https://testnet.dhscan.io',
     nativeCurrency: { name: 'Mock', symbol: 'MOCK', decimals: 18 },
   },
 };
