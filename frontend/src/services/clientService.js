@@ -1,8 +1,6 @@
 // DataHaven Client Service - Wallet & StorageHub Client Management
 import { defineChain, createPublicClient, createWalletClient, http, custom } from 'viem';
 import { StorageHubClient } from '@storagehub-sdk/core';
-import { ApiPromise, WsProvider } from '@polkadot/api';
-import { types } from '@storagehub/types-bundle';
 import { NETWORKS, FILESYSTEM_CONTRACT } from '../config/networks';
 
 // Storage key
@@ -20,7 +18,6 @@ export const chain = defineChain({
 let walletClientInstance = null;
 let publicClientInstance = null;
 let storageHubClientInstance = null;
-let polkadotApiInstance = null;
 let connectedAddress = null;
 
 // Initialize from storage
@@ -124,22 +121,6 @@ export async function connectWallet() {
   return connectedAddress;
 }
 
-// Initialize Polkadot API for chain queries
-export async function initPolkadotApi() {
-  if (polkadotApiInstance) {
-    return polkadotApiInstance;
-  }
-
-  const provider = new WsProvider(NETWORKS.testnet.wsUrl);
-  polkadotApiInstance = await ApiPromise.create({
-    provider,
-    typesBundle: types,
-    noInitWarn: true,
-  });
-
-  return polkadotApiInstance;
-}
-
 // Getters for client instances
 export function getWalletClient() {
   if (!walletClientInstance) {
@@ -153,13 +134,6 @@ export function getStorageHubClient() {
     throw new Error('StorageHub client not initialized. Please connect your wallet first.');
   }
   return storageHubClientInstance;
-}
-
-export function getPolkadotApi() {
-  if (!polkadotApiInstance) {
-    throw new Error('Polkadot API not initialized. Please initialize it first.');
-  }
-  return polkadotApiInstance;
 }
 
 export function getConnectedAddress() {
@@ -222,14 +196,6 @@ export function disconnectWallet() {
 
   if (typeof window !== 'undefined') {
     sessionStorage.removeItem(CONNECTED_ADDRESS_KEY);
-  }
-}
-
-// Disconnect Polkadot API
-export async function disconnectPolkadotApi() {
-  if (polkadotApiInstance) {
-    await polkadotApiInstance.disconnect();
-    polkadotApiInstance = null;
   }
 }
 

@@ -1,16 +1,13 @@
-// DataHaven Storage Operations - Simplified Implementation
-// Based on @storagehub-sdk/core and @storagehub-sdk/msp-client documentation
+// DataHaven Storage Operations
+// Uses @storagehub-sdk/core (EVM precompiles) and @storagehub-sdk/msp-client (REST)
 
-import '@storagehub/api-augment';
 import { FileManager, ReplicationLevel } from '@storagehub-sdk/core';
-import { TypeRegistry } from '@polkadot/types';
+import { TypeRegistry } from '@polkadot/types'; // Required by FileManager.computeFileKey
 import {
   getStorageHubClient,
   getConnectedAddress,
   getPublicClient,
-  getPolkadotApi,
   buildGasTxOpts,
-  initPolkadotApi,
 } from './clientService';
 import { getMspClient, authenticateUser, isAuthenticated } from './mspService';
 import { NETWORKS } from '../config/networks';
@@ -28,7 +25,6 @@ export async function createBucket(bucketName, isPrivate = false) {
   const storageHubClient = getStorageHubClient();
   const address = getConnectedAddress();
   const publicClient = getPublicClient();
-  const polkadotApi = await initPolkadotApi();
 
   if (!address) {
     throw new Error('Wallet not connected');
@@ -38,11 +34,19 @@ export async function createBucket(bucketName, isPrivate = false) {
   const bucketId = await storageHubClient.deriveBucketId(address, bucketName);
   console.log('📝 Derived bucket ID:', bucketId);
 
-  // Check if bucket already exists
-  const bucketBeforeCreation = await polkadotApi.query.providers.buckets(bucketId);
-  if (!bucketBeforeCreation.isEmpty) {
-    console.log('✅ Bucket already exists');
-    return { bucketId, txHash: null, alreadyExists: true };
+  // Check if bucket already exists via MSP client
+  try {
+    const mspClient = getMspClient();
+    const existingBuckets = await mspClient.buckets.listBuckets();
+    const found = Array.isArray(existingBuckets) && existingBuckets.find(
+      b => b.name === bucketName || b.bucketId === bucketId
+    );
+    if (found) {
+      console.log('✅ Bucket already exists (found via MSP)');
+      return { bucketId: found.bucketId || bucketId, txHash: null, alreadyExists: true };
+    }
+  } catch (err) {
+    console.warn('Could not check existing buckets, proceeding with creation:', err.message);
   }
 
   // Get MSP ID from client info
@@ -56,8 +60,8 @@ export async function createBucket(bucketName, isPrivate = false) {
   }
   console.log('🔑 MSP ID:', mspId);
 
-  // Get default value prop (first available)
-  const valueProps = await mspClient.valueProps.listValueProps();
+  // Get default value prop via info.getValuePropositions()
+  const valueProps = await mspClient.info.getValuePropositions();
   if (!valueProps || valueProps.length === 0) {
     throw new Error('No value propositions available from MSP');
   }
@@ -67,7 +71,7 @@ export async function createBucket(bucketName, isPrivate = false) {
   // Build gas transaction options
   const gasTxOpts = await buildGasTxOpts();
 
-  // Create bucket on-chain
+  // Create bucket on-chain via EVM precompile
   console.log('⛓️ Creating bucket on-chain...');
   const txHash = await storageHubClient.createBucket(
     mspId,
@@ -199,7 +203,6 @@ export async function uploadAuditProof(bucketId, proofData) {
   
   const storageHubClient = getStorageHubClient();
   const publicClient = getPublicClient();
-  const polkadotApi = await initPolkadotApi();
   const mspClient = getMspClient();
   const address = getConnectedAddress();
 
@@ -334,13 +337,7 @@ export async function uploadAuditProof(bucketId, proofData) {
   const bucketIdH256 = registry.createType('H256', bucketId);
   const fileKey = await fileManager.computeFileKey(owner, bucketIdH256, fileName);
   console.log('🔑 File key:', fileKey.toHex());
-
-  // Verify storage request exists on-chain
-  const storageRequest = await polkadotApi.query.fileSystem.storageRequests(fileKey);
-  if (!storageRequest.isSome) {
-    throw new Error('Storage request not found on chain after confirmation');
-  }
-  console.log('✅ Storage request verified on-chain');
+  console.log('✅ Storage request confirmed via tx receipt');
 
   // Upload file content to MSP (off-chain)
   console.log('☁️ Uploading file content to MSP...');
@@ -384,35 +381,4 @@ export async function getBucketFilesFromMSP(bucketId) {
   return files;
 }
 
-/**
- * Wait for MSP to confirm the file storage on-chain
- */
-export async function waitForMSPConfirmOnChain(fileKey) {
-  console.log('⏳ Waiting for MSP confirmation:', fileKey);
-  
-  const polkadotApi = await initPolkadotApi();
-  const maxAttempts = 20;
-  const delayMs = 2000;
 
-  for (let i = 0; i < maxAttempts; i++) {
-    const req = await polkadotApi.query.fileSystem.storageRequests(fileKey);
-    if (req.isNone) {
-      throw new Error(`StorageRequest for ${fileKey} no longer exists on-chain`);
-    }
-    
-    const data = req.unwrap();
-    const mspStatus = data.mspStatus;
-
-    const mspConfirmed = mspStatus.isAcceptedNewFile || mspStatus.isAcceptedExistingFile;
-
-    if (mspConfirmed) {
-      console.log('✅ MSP confirmed storage');
-      return true;
-    }
-
-    console.log(`⏳ Attempt ${i + 1}/${maxAttempts}: Waiting for MSP confirmation...`);
-    await new Promise((r) => setTimeout(r, delayMs));
-  }
-  
-  throw new Error(`File ${fileKey} not confirmed by MSP after waiting`);
-}

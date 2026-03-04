@@ -7,8 +7,6 @@ import {
   isWalletConnected,
   getConnectedAddress,
   getWalletBalance,
-  initPolkadotApi,
-  disconnectPolkadotApi,
 } from '../services/clientService';
 import {
   connectToMsp,
@@ -118,9 +116,6 @@ export function DataHavenProvider({ children }) {
     setError(null);
     
     try {
-      // Initialize Polkadot API for chain queries
-      await initPolkadotApi();
-      
       const profile = await authenticateUser();
       setAuthenticated(true);
       setUserProfile(profile);
@@ -154,10 +149,7 @@ export function DataHavenProvider({ children }) {
       const health = await getMspHealth();
       setMspHealth(health);
       
-      // Step 3: Initialize Polkadot API
-      await initPolkadotApi();
-      
-      // Step 4: Authenticate
+      // Step 3: Authenticate
       const profile = await authenticateUser();
       setAuthenticated(true);
       setUserProfile(profile);
@@ -175,7 +167,6 @@ export function DataHavenProvider({ children }) {
   const handleDisconnect = useCallback(async () => {
     disconnectWallet();
     disconnectMsp();
-    await disconnectPolkadotApi();
     
     setWalletAddress(null);
     setWalletBalance(null);
